@@ -4,7 +4,7 @@ Annoyingly, none of Microsoft's utilities coming with windows are enabling prope
 
 Jerboa records audio on your Windows device the way you actually need it: Combining both the Microphone input and the system audio into one MP3 file - so you are recording exactly what you heard. Minimalist UI, it does nothing but that. 
 
-So it's perfect to eg record audio from webinars or any video conferences regardless of the video conferencing system you have been using. 
+So it's perfect to eg record audio from webinars or any video conference system, which you may need if you want to e.g. transcribe the session with a separate service later.
 
 
 The name is a desert rodent: tiny, quick, large ears - you get the idea.
