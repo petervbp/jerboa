@@ -4,3 +4,6 @@ obj/
 dist/
 CLAUDE.md
 __pycache__/
+
+# scratch files for commit messages
+*.tmp
