@@ -12,8 +12,12 @@ internal sealed class MainForm : Form
     private static readonly Color Muted = Color.FromArgb(112, 112, 110);
     private static readonly Color RecordRed = Color.FromArgb(163, 45, 45);
 
-    /// <summary>The far end of the status pulse — faded, never so pale it looks switched off.</summary>
-    private static readonly Color RecordRedSoft = Color.FromArgb(206, 132, 132);
+    /// <summary>
+    /// The far end of the status pulse. It is the window's own background, so the word
+    /// fades out completely rather than merely dimming — at a glance across the desk that
+    /// reads as movement, which a change of shade does not.
+    /// </summary>
+    private static readonly Color RecordRedFaded = Color.White;
     private static readonly Color PauseAmber = Color.FromArgb(133, 79, 11);
     private static readonly Color NoticeBack = Color.FromArgb(225, 245, 238);
     private static readonly Color NoticeInk = Color.FromArgb(15, 110, 86);
@@ -717,7 +721,7 @@ internal sealed class MainForm : Form
         _time.ForeColor = Ink;
         _status.Text = "Recording";
         _status.Font = _statusStrong!;
-        _status.ForeColor = Blend(RecordRedSoft, RecordRed, breath);
+        _status.ForeColor = Blend(RecordRedFaded, RecordRed,breath);
         _notice.Visible = false;
         _settingsPanel.Visible = false;
         _settingsOpen = false;
@@ -938,7 +942,7 @@ internal sealed class MainForm : Form
 
                 // The word breathes on the same curve as the dot in the notification area,
                 // so a glance at either says the same thing.
-                _status.ForeColor = Blend(RecordRedSoft, RecordRed, TrayIcons.Breath(elapsed));
+                _status.ForeColor = Blend(RecordRedFaded, RecordRed,TrayIcons.Breath(elapsed));
             }
         }
 

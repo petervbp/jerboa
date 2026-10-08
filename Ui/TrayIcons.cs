@@ -19,7 +19,7 @@ public sealed class TrayIcons : IDisposable
     private const int PulseFrames = 12;
 
     /// <summary>How long one breath of the recording dot takes.</summary>
-    public static readonly TimeSpan PulsePeriod = TimeSpan.FromMilliseconds(1600);
+    public static readonly TimeSpan PulsePeriod = TimeSpan.FromMilliseconds(2000);
 
     private static readonly Color RecordingRed = Color.FromArgb(226, 75, 74);
     private static readonly Color PausedAmber = Color.FromArgb(239, 159, 39);

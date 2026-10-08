@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Jerboa</RootNamespace>
     <AssemblyName>Jerboa</AssemblyName>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <Product>Jerboa</Product>
     <Description>Records system audio and microphone into a single stereo MP3.</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
