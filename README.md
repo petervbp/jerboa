@@ -6,6 +6,8 @@ Jerboa records audio on your Windows device the way you actually need it: Combin
 
 So it's perfect to eg record audio from webinars or any video conference system, which you may need if you want to e.g. transcribe the session with a separate service later.
 
+When the slides matter as much as the words, it can record the picture of one window alongside the sound — but that is a switch you reach for, never the default.
+
 
 The name is a desert rodent: tiny, quick, large ears - you get the idea.
 
@@ -64,6 +66,36 @@ file contains what was said, not how long you sat there.
 
 **Closing the window does not stop anything.** It tucks Jerboa away into the notification area next to the clock, where the icon shows what is going on: the jerboa when idle, a slowly pulsing red dot while recording, orange pause bars when a recording is paused. Click it to get the window back, right-click it for the same controls without opening anything. Quitting for real is the **Exit** entry in that menu.
 
+## Recording the picture too
+
+Some meetings are only worth keeping because of what was on screen. Switch the mode above
+the Start button from **Audio only** to **Audio + video**, choose a window or a screen, and
+the recording becomes a single MP4 carrying the picture alongside the same two-channel
+sound.
+
+<p align="center">
+  <img src="docs/video.png" alt="The window with a video source chosen" width="420">
+</p>
+
+The mode falls back to **Audio only** before every recording. The window you chose is
+remembered, so a run of meetings costs one click rather than a trip through the dialog each
+time — but a video recording never happens because a switch was left over from yesterday.
+Dismissing the dialog means never mind, not record something.
+
+**1080p at 8 frames a second**, always. That sounds thin until you consider what is
+actually on screen: slides need resolution, not frame rate, and quality-based encoding
+spends almost nothing on a picture that is not changing. A slide-heavy hour lands between
+100 and 180 MB. It is not the setting for smooth motion — it is the one that keeps text
+readable and files small.
+
+**The size of the window is the size of the recording.** A window shorter than 1080 rows is
+captured as it is and scaled up, which makes slides soft. Jerboa shows you the size of what
+you chose and says so before you start, because the only moment that can be fixed is while
+you can still drag the window bigger.
+
+Video needs [ffmpeg](https://ffmpeg.org) on your PATH; audio never does. Without it the
+switch is disabled and says why.
+
 ## Where the recordings go
 
 By default `Music\Recordings` in your user folder, changeable in the settings. Files are
@@ -73,7 +105,9 @@ named for when the recording started and how long it lasted:
 20260909 1430h Recording 47 min.mp3
 ```
 
-The length is the length of the file, so pauses are not counted. Around 60 MB per hour.
+A recording with video is an `.mp4` under the same name. The length is the length of the
+file, so pauses are not counted. Around 60 MB per hour for sound alone, 100 to 180 MB with
+the picture.
 
 ## Getting the two tracks back out
 
@@ -116,6 +150,17 @@ taken from the system clock and fills in for whichever device falls behind, whic
 the two within a few tens of milliseconds of each other over a session. It has not been
 proven over the really long haul — if you record a four-hour workshop, listen to the end.
 
+**Tabs are not windows.** Jerboa records a browser window, not a particular tab. Switch
+tabs mid-recording and the recording follows the window. Capturing one tab regardless of
+what is on screen would need a browser extension, which is a different program altogether.
+
+**A minimised window produces no picture at all** — not a frozen frame, nothing. Jerboa
+notices within a few seconds and tells you, and the sound carries on regardless, but there
+is no picture to be had while the window stays minimised.
+
+**Resizing the window mid-recording** does not change the recording. The frame size is
+settled when you press Start, and a window made bigger afterwards is fitted back into it.
+
 **One recording at a time**, and one Jerboa at a time. Starting it twice just brings the
 running window forward.
 
@@ -141,13 +186,17 @@ it captured, including how much alignment correction was needed:
 
 `--screenshot <prefix>` renders each window state to PNG files without opening anything, which is how the pictures above were made.
 
+`--videotest 20 "<part of a window title>"` captures a window with no interface at all and
+reports the frame rate, how much was read back out of video memory and what it cost. Leave
+the title off to capture the main screen.
+
 **On an ARM machine** — a Snapdragon laptop, say — this builds and runs fine, but it
 stays an x64 program running under Windows' emulation. That is not laziness: the MP3
 encoder is a native library that ships for x86 and x64 only, with no ARM64 build
 available. A native ARM64 version would mean compiling LAME for ARM64 first, or dropping it for the encoder built into Windows — which cannot be told to keep the two stereo channels strictly apart, and that would cost the one feature this program exists for.
 
 **How it works inside**, in three sentences. System audio is captured through WASAPI
-loopback, which taps the playback device before the sound reaches the hardware and needs no "stereo mix" and no virtual cable; a silent playback stream runs alongside it, because an idle device delivers no loopback data at all and the recording would grow holes. Both inputs are reduced to one channel each, buffered, and emitted onto a single timeline driven by the system clock, padding whichever has fallen behind — that is what keeps the channels aligned. The two are interleaved into stereo and encoded to MP3 as they arrive, so a crash leaves a playable file rather than a broken one.
+loopback, which taps the playback device before the sound reaches the hardware and needs no "stereo mix" and no virtual cable; a silent playback stream runs alongside it, because an idle device delivers no loopback data at all and the recording would grow holes. Both inputs are reduced to one channel each, buffered, and emitted onto a single timeline driven by the system clock, padding whichever has fallen behind — that is what keeps the channels aligned. The two are interleaved into stereo and encoded to MP3 as they arrive, so a crash leaves a playable file rather than a broken one. Video, when asked for, is captured through Windows.Graphics.Capture and written as a second, silent file on its own pump; the two are laid together once at the end, shifted by the difference between their first written moments. Building it needs the Windows 10 22621 SDK, but the result still runs on Windows 10 1903.
 
 ## Licence
 

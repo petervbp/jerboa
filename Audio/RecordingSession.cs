@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using NAudio.CoreAudioApi;
 using NAudio.Lame;
 using NAudio.Wave;
@@ -7,7 +8,7 @@ namespace Jerboa.Audio;
 
 public enum SessionState { Idle, Recording, Paused }
 
-public sealed record SessionResult(string FilePath, TimeSpan Duration);
+public sealed record SessionResult(string FilePath, TimeSpan Duration, string? Problem = null);
 
 /// <summary>
 /// A single recording. Microphone and system audio are captured independently and
@@ -31,7 +32,9 @@ public sealed class RecordingSession : IDisposable
     private volatile bool _paused;
     private long _framesWritten;
     private string _partPath = "";
+    private string _videoPartPath = "";
     private string _baseName = "";
+    private Video.VideoTrack? _video;
     private string _folder = "";
 
     private float[] _left = Array.Empty<float>();
@@ -50,7 +53,8 @@ public sealed class RecordingSession : IDisposable
     /// <summary>A device could not be opened at all when starting.</summary>
     public event Action<string>? Warning;
 
-    public void Start(MMDevice? renderDevice, MMDevice? captureDevice, string folder, DateTime startedAt)
+    public void Start(MMDevice? renderDevice, MMDevice? captureDevice, string folder, DateTime startedAt,
+                      Windows.Graphics.Capture.GraphicsCaptureItem? videoSource = null)
     {
         if (State != SessionState.Idle) throw new InvalidOperationException("A recording is already running.");
 
@@ -58,6 +62,7 @@ public sealed class RecordingSession : IDisposable
         _folder = folder;
         _baseName = startedAt.ToString("yyyyMMdd HHmm") + "h";
         _partPath = Path.Combine(folder, _baseName + " Recording.part.mp3");
+        _videoPartPath = Path.Combine(folder, _baseName + " Recording.part.mp4");
         _framesWritten = 0;
         _paused = false;
 
@@ -89,6 +94,26 @@ public sealed class RecordingSession : IDisposable
         State = SessionState.Recording;
         _pump = new Thread(Pump) { IsBackground = true, Name = "Jerboa pump", Priority = ThreadPriority.AboveNormal };
         _pump.Start();
+
+        // Video comes last on purpose: the audio is the recording, and nothing about
+        // starting the picture may delay or endanger it.
+        if (videoSource != null) StartVideo(videoSource);
+    }
+
+    private void StartVideo(Windows.Graphics.Capture.GraphicsCaptureItem source)
+    {
+        try
+        {
+            _video = new Video.VideoTrack(source, _videoPartPath);
+            _video.Ended += message => VideoEnded?.Invoke(message);
+            _video.Start();
+        }
+        catch (Exception ex)
+        {
+            Warning?.Invoke("Video could not be started: " + ex.Message);
+            _video?.Dispose();
+            _video = null;
+        }
     }
 
     private void OpenSystem(MMDevice? renderDevice)
@@ -139,6 +164,7 @@ public sealed class RecordingSession : IDisposable
     {
         if (State != SessionState.Recording) return;
         _paused = true;
+        _video?.Pause();
         State = SessionState.Paused;
     }
 
@@ -146,8 +172,21 @@ public sealed class RecordingSession : IDisposable
     {
         if (State != SessionState.Paused) return;
         _paused = false;
+        _video?.Resume();
         State = SessionState.Recording;
     }
+
+    /// <summary>True while a recording is also capturing a picture.</summary>
+    public bool HasVideo => _video != null;
+
+    /// <summary>False while the chosen source has never produced a picture.</summary>
+    public bool VideoSawPicture => _video?.SawPicture ?? false;
+
+    /// <summary>The window or screen being captured.</summary>
+    public string VideoSourceName => _video?.SourceName ?? "";
+
+    /// <summary>Raised when the captured window closes while the recording continues.</summary>
+    public event Action<string>? VideoEnded;
 
     /// <summary>Stops, closes the file and gives it its final name including the net duration.</summary>
     public SessionResult Stop()
@@ -168,24 +207,90 @@ public sealed class RecordingSession : IDisposable
             _writer = null;
         }
 
+        try { _video?.Stop(); } catch { }
+
         LastDriftReport = DriftReport();
+        var result = Finalise(duration);
+
+        _video?.Dispose();
+        _video = null;
         Cleanup();
         State = SessionState.Idle;
 
-        return new SessionResult(FinalisePath(duration), duration);
+        return result;
     }
 
-    /// <summary>Renames the part file to "20260909 1430h Recording 47 min.mp3".</summary>
-    private string FinalisePath(TimeSpan duration)
+    /// <summary>
+    /// Gives the recording its final name, and lays the picture over the sound if there
+    /// was one. Audio and video were written as two independent files on two independent
+    /// pumps; both started from the same wall clock, so combining them is a single shift
+    /// by the difference between their first written moments.
+    /// </summary>
+    private SessionResult Finalise(TimeSpan duration)
     {
         string length = DescribeLength(duration);
-        string target = Path.Combine(_folder, $"{_baseName} Recording {length}.mp3");
+        bool hasVideo = _video != null && File.Exists(_videoPartPath) && new FileInfo(_videoPartPath).Length > 1024;
 
+        if (!hasVideo)
+        {
+            TryDelete(_videoPartPath);
+            return new SessionResult(MoveToFinal(_partPath, ".mp3", length), duration, _video?.Failure);
+        }
+
+        double offset = 0;
+        if (_video!.FirstFrameUtc is { } videoStart && AudioStartUtc is { } audioStart)
+            offset = (videoStart - audioStart).TotalSeconds;
+
+        string target = UniquePath(".mp4", length);
+        string videoShift = Shift(offset);
+        string audioShift = Shift(-offset);
+
+        var arguments =
+            $"-hide_banner -loglevel error -y {videoShift}-i \"{_videoPartPath}\" {audioShift}-i \"{_partPath}\" " +
+            $"-map 0:v -map 1:a -c copy -shortest \"{target}\"";
+
+        if (Video.Ffmpeg.Run(arguments, out var diagnostics) && File.Exists(target))
+        {
+            TryDelete(_partPath);
+            TryDelete(_videoPartPath);
+            return new SessionResult(target, duration, _video.Failure);
+        }
+
+        // Nothing is thrown away because the two halves would not join: both are kept.
+        var keptAudio = MoveToFinal(_partPath, ".mp3", length);
+        MoveToFinal(_videoPartPath, ".mp4", length);
+        return new SessionResult(keptAudio, duration,
+            "Sound and picture could not be combined, so both were kept separately. " + FirstLine(diagnostics));
+    }
+
+    /// <summary>An ffmpeg input shift, for whichever of the two started later.</summary>
+    private static string Shift(double seconds) =>
+        seconds > 0.02 ? $"-itsoffset {seconds.ToString("0.###", CultureInfo.InvariantCulture)} " : "";
+
+    private string UniquePath(string extension, string length)
+    {
+        string target = Path.Combine(_folder, $"{_baseName} Recording {length}{extension}");
         for (int suffix = 2; File.Exists(target); suffix++)
-            target = Path.Combine(_folder, $"{_baseName} Recording {length} ({suffix}).mp3");
+            target = Path.Combine(_folder, $"{_baseName} Recording {length} ({suffix}){extension}");
+        return target;
+    }
 
-        try { File.Move(_partPath, target); return target; }
-        catch { return _partPath; }
+    private string MoveToFinal(string part, string extension, string length)
+    {
+        var target = UniquePath(extension, length);
+        try { File.Move(part, target); return target; }
+        catch { return part; }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { }
+    }
+
+    private static string FirstLine(string text)
+    {
+        var line = text.Split('\n').FirstOrDefault(l => l.Trim().Length > 0) ?? "";
+        return line.Trim();
     }
 
     /// <summary>
@@ -199,8 +304,12 @@ public sealed class RecordingSession : IDisposable
     /// Emits exactly as many frames as wall-clock time has passed, taking what each
     /// device has produced and padding with silence where one has fallen behind.
     /// </summary>
+    /// <summary>When the audio timeline began, used to line the picture up against it.</summary>
+    public DateTime? AudioStartUtc { get; private set; }
+
     private void Pump()
     {
+        AudioStartUtc = DateTime.UtcNow;
         var clock = Stopwatch.StartNew();
         var previous = clock.Elapsed;
         var recorded = TimeSpan.Zero;

@@ -36,6 +36,15 @@ internal sealed class MainForm : Form
     private readonly Button _secondary = new();
     private readonly Button _gear = new();
 
+    private readonly TableLayoutPanel _mode = new();
+    private readonly Button _modeAudio = new();
+    private readonly Button _modeVideo = new();
+    private readonly Panel _source = new();
+    private readonly Label _sourceName = new();
+    private readonly LinkLabel _sourceChange = new();
+    private readonly Label _sourceSize = new();
+    private readonly Label _sourceHint = new();
+
     private readonly TableLayoutPanel _settingsPanel = new();
     private readonly TextBox _folder = new();
     private readonly ComboBox _playback = new();
@@ -53,6 +62,11 @@ internal sealed class MainForm : Form
     private int _pulseFrame = -1;
     private bool _placeAutomatically = true;
     private int _settingsNaturalWidth;
+
+    /// <summary>The source picked for video, kept for the session so it need not be picked twice.</summary>
+    private Windows.Graphics.Capture.GraphicsCaptureItem? _videoSource;
+    private bool _videoMode;
+    private bool _noPictureWarned;
 
     private const int WindowMargin = 12;
     private const double SettingsWidthFactor = 1.3;
@@ -73,6 +87,11 @@ internal sealed class MainForm : Form
 
         _session.Warning += message => BeginInvoke(() => Notify("Device problem", message));
         _session.DeviceLost += OnDeviceLost;
+        _session.VideoEnded += message => BeginInvoke(() =>
+        {
+            Notify("Video stopped", message);
+            ApplyMode();
+        });
         _hotkey.Pressed += () => BeginInvoke(ToggleRecording);
         _timer.Tick += (_, _) => OnTick();
         _timer.Start();
@@ -119,6 +138,8 @@ internal sealed class MainForm : Form
         _root.Controls.Add(BuildHeader());
         _root.Controls.Add(BuildMeters());
         _root.Controls.Add(BuildNotice());
+        _root.Controls.Add(BuildMode());
+        _root.Controls.Add(BuildSource());
         _root.Controls.Add(BuildButtons());
         _root.Controls.Add(BuildSettings());
     }
@@ -220,6 +241,190 @@ internal sealed class MainForm : Form
         line.Controls.Add(link);
         _notice.Controls.Add(line);
         return _notice;
+    }
+
+    /// <summary>
+    /// The two recording modes. Audio only is the default at every start, so a forgotten
+    /// switch can never turn a quick note into two hours of video; choosing video is a
+    /// deliberate act each time, though the source behind it is remembered.
+    /// </summary>
+    private Control BuildMode()
+    {
+        _mode.ColumnCount = 2;
+        _mode.RowCount = 1;
+        _mode.AutoSize = true;
+        _mode.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _mode.Dock = DockStyle.Fill;
+        _mode.Margin = new Padding(0, 0, 0, 10);
+        _mode.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        _mode.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        _mode.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+
+        _modeAudio.Text = "Audio only";
+        _modeVideo.Text = "Audio + video";
+
+        foreach (var button in new[] { _modeAudio, _modeVideo })
+        {
+            button.Dock = DockStyle.Fill;
+            button.Margin = new Padding(0, 0, 4, 0);
+            button.FlatStyle = FlatStyle.Flat;
+            button.UseVisualStyleBackColor = false;
+            button.FlatAppearance.BorderSize = 1;
+        }
+        _modeVideo.Margin = new Padding(0);
+
+        _modeAudio.Click += (_, _) => ChooseMode(false);
+        _modeVideo.Click += (_, _) => ChooseMode(true);
+
+        _mode.Controls.Add(_modeAudio, 0, 0);
+        _mode.Controls.Add(_modeVideo, 1, 0);
+        return _mode;
+    }
+
+    /// <summary>
+    /// What the picture will be taken from, and how big it actually is. The size is not
+    /// decoration: a window smaller than 1080 rows is recorded as it is and upscaled, so
+    /// its slides end up soft — and the only moment that can still be fixed is now.
+    /// </summary>
+    private Control BuildSource()
+    {
+        _source.AutoSize = true;
+        _source.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _source.Dock = DockStyle.Fill;
+        _source.BackColor = Color.FromArgb(246, 245, 242);
+        _source.Padding = new Padding(10, 7, 10, 7);
+        _source.Margin = new Padding(0, 0, 0, 10);
+        _source.Visible = false;
+
+        var rows = Column();
+        rows.Dock = DockStyle.Fill;
+
+        var line = new TableLayoutPanel
+        {
+            ColumnCount = 2,
+            RowCount = 1,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Fill,
+            Margin = Padding.Empty
+        };
+        line.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        line.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        _sourceName.AutoSize = false;
+        _sourceName.Dock = DockStyle.Fill;
+        _sourceName.Height = 17;
+        _sourceName.ForeColor = Ink;
+        _sourceName.AutoEllipsis = true;
+        _sourceName.TextAlign = ContentAlignment.MiddleLeft;
+        _sourceName.Margin = Padding.Empty;
+
+        _sourceChange.Text = "Change";
+        _sourceChange.AutoSize = true;
+        _sourceChange.LinkColor = Muted;
+        _sourceChange.ActiveLinkColor = Ink;
+        _sourceChange.Margin = new Padding(8, 1, 0, 0);
+        _sourceChange.LinkClicked += (_, _) => ChooseMode(true, alwaysAsk: true);
+
+        line.Controls.Add(_sourceName, 0, 0);
+        line.Controls.Add(_sourceChange, 1, 0);
+
+        // The size gets a line of its own: a long window title would otherwise push the
+        // one number this panel exists for off the end of the row.
+        _sourceSize.AutoSize = true;
+        _sourceSize.ForeColor = Muted;
+        _sourceSize.Margin = new Padding(0, 2, 0, 0);
+
+        _sourceHint.AutoSize = true;
+        _sourceHint.ForeColor = PauseAmber;
+        _sourceHint.Margin = new Padding(0, 4, 0, 0);
+        // Narrow enough that the hint wraps instead of stretching the whole window.
+        _sourceHint.MaximumSize = new Size(FieldWidth + 72, 0);
+        _sourceHint.Visible = false;
+
+        rows.Controls.Add(line);
+        rows.Controls.Add(_sourceSize);
+        rows.Controls.Add(_sourceHint);
+        _source.Controls.Add(rows);
+
+        if (!Video.Ffmpeg.IsAvailable || !Video.SourcePicker.IsSupported)
+        {
+            _modeVideo.Enabled = false;
+            _tips.SetToolTip(_modeVideo, Video.Ffmpeg.IsAvailable
+                ? "This version of Windows cannot record a window."
+                : "Video needs ffmpeg. Install it to record a window.");
+        }
+
+        ApplyMode();
+        return _source;
+    }
+
+    /// <summary>
+    /// Switches mode, asking which window to record when video needs a source. Dismissing
+    /// that dialog means "never mind" and falls back to audio rather than quietly
+    /// recording something nobody chose.
+    /// </summary>
+    private async void ChooseMode(bool video, bool alwaysAsk = false)
+    {
+        if (_session.State != SessionState.Idle) return;
+
+        if (!video)
+        {
+            _videoMode = false;
+            ApplyMode();
+            return;
+        }
+
+        if (!_modeVideo.Enabled) return;
+
+        if (alwaysAsk || !Video.SourcePicker.StillUsable(_videoSource))
+        {
+            var picked = await Video.SourcePicker.ChooseAsync(Handle);
+            if (picked == null)
+            {
+                if (!Video.SourcePicker.StillUsable(_videoSource)) _videoMode = false;
+                ApplyMode();
+                return;
+            }
+            _videoSource = picked;
+        }
+
+        _videoMode = true;
+        ApplyMode();
+    }
+
+    private void ApplyMode()
+    {
+        if (_videoMode && !Video.SourcePicker.StillUsable(_videoSource)) _videoMode = false;
+
+        StyleSegment(_modeAudio, !_videoMode);
+        StyleSegment(_modeVideo, _videoMode);
+
+        bool show = _videoMode || _session.HasVideo;
+        _source.Visible = show;
+        if (!show) return;
+
+        var item = _videoSource;
+        int width = item?.Size.Width ?? 0;
+        int height = item?.Size.Height ?? 0;
+        var name = string.IsNullOrWhiteSpace(item?.DisplayName) ? "Selected source" : item!.DisplayName;
+
+        _sourceName.Text = name;
+        _sourceSize.Text = height > 0 ? $"{width} × {height}" : "size unknown";
+        _sourceChange.Visible = _session.State == SessionState.Idle;
+
+        bool small = height > 0 && height < Video.VideoWriter.OutputHeight;
+        _sourceHint.Visible = small;
+        if (small) _sourceHint.Text = "Smaller than 1080p. Enlarge the window for sharper slides.";
+    }
+
+    /// <summary>The chosen half is filled solid — red is reserved for the recording itself.</summary>
+    private static void StyleSegment(Button button, bool selected)
+    {
+        button.BackColor = selected ? Ink : Color.White;
+        button.ForeColor = selected ? Color.White : Muted;
+        button.FlatAppearance.BorderColor = selected ? Ink : Color.FromArgb(206, 204, 198);
+        button.FlatAppearance.MouseOverBackColor = selected ? Ink : Color.FromArgb(243, 242, 239);
     }
 
     private Control BuildButtons()
@@ -484,6 +689,18 @@ internal sealed class MainForm : Form
     }
 
     /// <summary>Hooks used by the --screenshot diagnostic to capture each layout state.</summary>
+    /// <summary>Shows the window as it looks with a video source chosen, for the screenshots.</summary>
+    internal void PreviewVideoSource(Windows.Graphics.Capture.GraphicsCaptureItem item)
+    {
+        _videoSource = item;
+        _videoMode = true;
+        _notice.Visible = false;
+        _settingsPanel.Visible = false;
+        _settingsOpen = false;
+        ApplySettingsLayout();
+        ApplyMode();
+    }
+
     internal void PreviewSettings() { _settingsOpen = true; _notice.Visible = false; _settingsPanel.Visible = true; ApplySettingsLayout(); }
 
     internal void PreviewNotice() { _settingsOpen = false; _settingsPanel.Visible = false; ApplySettingsLayout(); _notice.Visible = true; }
@@ -600,7 +817,8 @@ internal sealed class MainForm : Form
                 Devices.Resolve(_settings.PlaybackDeviceId, DataFlow.Render),
                 Devices.Resolve(_settings.MicrophoneDeviceId, DataFlow.Capture),
                 _folder.Text,
-                DateTime.Now);
+                DateTime.Now,
+                _videoMode ? _videoSource : null);
         }
         catch (Exception ex)
         {
@@ -610,6 +828,7 @@ internal sealed class MainForm : Form
 
         _lastFolder = _folder.Text;
         _notice.Visible = false;
+        _noPictureWarned = false;
         if (_settingsOpen) ToggleSettings();
         RefreshState();
     }
@@ -631,9 +850,14 @@ internal sealed class MainForm : Form
         _notice.Visible = true;
         _systemMeter.Reset();
         _micMeter.Reset();
+
+        // Back to audio for the next one, every time. The source stays remembered.
+        _videoMode = false;
+        ApplyMode();
         RefreshState();
 
-        if (automatic || !Visible) Notify("Recording finished", Path.GetFileName(result.FilePath));
+        if (result.Problem != null) Notify("Recording finished", result.Problem);
+        else if (automatic || !Visible) Notify("Recording finished", Path.GetFileName(result.FilePath));
     }
 
     private void OnDeviceLost(string message)
@@ -657,6 +881,16 @@ internal sealed class MainForm : Form
 
             int limit = _settings.AutoStopMinutes;
             if (limit > 0 && elapsed.TotalMinutes >= limit) { StopRecording(true); return; }
+
+            // A minimised window produces no picture at all. Better to hear about it in the
+            // first seconds than to find a black film after the meeting.
+            if (!_noPictureWarned && _session.HasVideo && !_session.VideoSawPicture
+                && elapsed.TotalSeconds > 3)
+            {
+                _noPictureWarned = true;
+                Notify("No picture", $"{_session.VideoSourceName} is not showing anything — is it minimised? " +
+                                     "Audio is recording normally.");
+            }
 
             if (_session.State == SessionState.Recording)
             {
@@ -733,6 +967,10 @@ internal sealed class MainForm : Form
                 _gear.Visible = false;
                 break;
         }
+
+        // The mode is settled before a recording starts and cannot change during one.
+        _mode.Enabled = _session.State == SessionState.Idle;
+        ApplyMode();
 
         _pulseFrame = -1;
         _tray.Icon = _trayIcons.For(_session.State, _session.Duration);
@@ -864,3 +1102,4 @@ internal sealed class MainForm : Form
         base.OnFormClosing(e);
     }
 }
+
