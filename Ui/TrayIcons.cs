@@ -53,6 +53,14 @@ public sealed class TrayIcons : IDisposable
     /// <summary>The recording icon for a given point in time.</summary>
     public Icon RecordingAt(TimeSpan elapsed) => _pulse[FrameIndex(elapsed)];
 
+    /// <summary>
+    /// The breath itself, 0 to 1 and back on the pulse period. The window uses the same
+    /// curve for its status text, so the corner of the screen and the corner of the window
+    /// beat together rather than against each other.
+    /// </summary>
+    public static double Breath(TimeSpan elapsed) =>
+        0.5 - 0.5 * Math.Cos(2 * Math.PI * elapsed.TotalMilliseconds / PulsePeriod.TotalMilliseconds);
+
     public static int FrameIndex(TimeSpan elapsed) =>
         (int)(elapsed.TotalMilliseconds / PulsePeriod.TotalMilliseconds * PulseFrames) % PulseFrames;
 

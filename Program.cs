@@ -164,6 +164,11 @@ internal static class Program
             }
         }
 
+        form.PreviewRecording(0.0);
+        Capture(form, prefix + "-recording-dim.png");
+        form.PreviewRecording(1.0);
+        Capture(form, prefix + "-recording-full.png");
+
         form.ForceClose();
         return 0;
     }

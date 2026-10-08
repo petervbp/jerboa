@@ -11,6 +11,9 @@ internal sealed class MainForm : Form
     private static readonly Color Ink = Color.FromArgb(32, 32, 30);
     private static readonly Color Muted = Color.FromArgb(112, 112, 110);
     private static readonly Color RecordRed = Color.FromArgb(163, 45, 45);
+
+    /// <summary>The far end of the status pulse — faded, never so pale it looks switched off.</summary>
+    private static readonly Color RecordRedSoft = Color.FromArgb(206, 132, 132);
     private static readonly Color PauseAmber = Color.FromArgb(133, 79, 11);
     private static readonly Color NoticeBack = Color.FromArgb(225, 245, 238);
     private static readonly Color NoticeInk = Color.FromArgb(15, 110, 86);
@@ -67,6 +70,9 @@ internal sealed class MainForm : Form
     private Windows.Graphics.Capture.GraphicsCaptureItem? _videoSource;
     private bool _videoMode;
     private bool _noPictureWarned;
+
+    private Font? _statusPlain;
+    private Font? _statusStrong;
 
     private const int WindowMargin = 12;
     private const double SettingsWidthFactor = 1.3;
@@ -166,6 +172,9 @@ internal sealed class MainForm : Form
         _status.Dock = DockStyle.Fill;
         _status.TextAlign = ContentAlignment.BottomRight;
         _status.Margin = new Padding(0, 0, 2, 8);
+
+        _statusPlain = _status.Font;
+        _statusStrong = new Font(_status.Font, FontStyle.Bold);
 
         header.Controls.Add(_time, 0, 0);
         header.Controls.Add(_status, 1, 0);
@@ -416,6 +425,15 @@ internal sealed class MainForm : Form
         bool small = height > 0 && height < Video.VideoWriter.OutputHeight;
         _sourceHint.Visible = small;
         if (small) _sourceHint.Text = "Smaller than 1080p. Enlarge the window for sharper slides.";
+    }
+
+    private static Color Blend(Color from, Color to, double amount)
+    {
+        amount = Math.Clamp(amount, 0, 1);
+        return Color.FromArgb(
+            (int)(from.R + (to.R - from.R) * amount),
+            (int)(from.G + (to.G - from.G) * amount),
+            (int)(from.B + (to.B - from.B) * amount));
     }
 
     /// <summary>The chosen half is filled solid — red is reserved for the recording itself.</summary>
@@ -689,6 +707,23 @@ internal sealed class MainForm : Form
     }
 
     /// <summary>Hooks used by the --screenshot diagnostic to capture each layout state.</summary>
+    /// <summary>
+    /// Paints the status corner as it looks mid-recording, at a chosen point of the pulse,
+    /// so the two ends of the breath can be compared without sitting through a recording.
+    /// </summary>
+    internal void PreviewRecording(double breath)
+    {
+        _time.Text = "00:42:17";
+        _time.ForeColor = Ink;
+        _status.Text = "Recording";
+        _status.Font = _statusStrong!;
+        _status.ForeColor = Blend(RecordRedSoft, RecordRed, breath);
+        _notice.Visible = false;
+        _settingsPanel.Visible = false;
+        _settingsOpen = false;
+        ApplySettingsLayout();
+    }
+
     /// <summary>Shows the window as it looks with a video source chosen, for the screenshots.</summary>
     internal void PreviewVideoSource(Windows.Graphics.Capture.GraphicsCaptureItem item)
     {
@@ -900,6 +935,10 @@ internal sealed class MainForm : Form
                     _pulseFrame = frame;
                     _tray.Icon = _trayIcons.RecordingAt(elapsed);
                 }
+
+                // The word breathes on the same curve as the dot in the notification area,
+                // so a glance at either says the same thing.
+                _status.ForeColor = Blend(RecordRedSoft, RecordRed, TrayIcons.Breath(elapsed));
             }
         }
 
@@ -941,6 +980,7 @@ internal sealed class MainForm : Form
                 _time.ForeColor = Muted;
                 _status.Text = "Ready";
                 _status.ForeColor = Muted;
+                _status.Font = _statusPlain!;
                 _primary.Text = "Start recording";
                 StyleAsRecordButton(_primary);
                 _tray.Text = "Jerboa — ready";
@@ -957,6 +997,7 @@ internal sealed class MainForm : Form
                 _time.ForeColor = Ink;
                 _status.Text = paused ? "Paused" : "Recording";
                 _status.ForeColor = paused ? PauseAmber : RecordRed;
+                _status.Font = _statusStrong!;
                 _primary.Text = paused ? "Resume" : "Pause";
                 StyleAsPlainButton(_primary);
                 _secondary.Text = "Stop";
@@ -968,8 +1009,10 @@ internal sealed class MainForm : Form
                 break;
         }
 
-        // The mode is settled before a recording starts and cannot change during one.
-        _mode.Enabled = _session.State == SessionState.Idle;
+        // The mode cannot change during a recording — ChooseMode refuses — but the buttons
+        // stay enabled on purpose. Greying them out hands their colours to Windows, which
+        // paints a disabled button's text grey whatever the foreground colour says, and the
+        // chosen half would lose the white-on-black that makes it readable at a glance.
         ApplyMode();
 
         _pulseFrame = -1;
